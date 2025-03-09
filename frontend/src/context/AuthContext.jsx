@@ -1,30 +1,42 @@
 import { createContext, useState, useEffect } from "react";
 
+// Create AuthContext
 export const AuthContext = createContext();
 
+// AuthProvider component
 const AuthProvider = ({ children }) => {
-    const [user, setUser] = useState(null);
+    const [user, setUser] = useState(() => {
+        // Retrieve user from localStorage (if exists) on initial render
+        return JSON.parse(localStorage.getItem("user")) || null;
+    });
 
-    // Load user from localStorage on app start
+    // Sync the user state with localStorage whenever it changes
     useEffect(() => {
-        const storedUser = localStorage.getItem("user");
-        if (storedUser) {
-            setUser(JSON.parse(storedUser));
+        if (user) {
+            localStorage.setItem("user", JSON.stringify(user));
+            localStorage.setItem("token", user.token); // Store token if user exists
+        } else {
+            localStorage.removeItem("user");
+            localStorage.removeItem("token"); // Also remove token when logged out
         }
-    }, []);
+    }, [user]);
 
-    // Logout function
+    // Login function - used for setting user
+    const login = (userData) => {
+        setUser(userData);
+    };
+
+    // Logout function - clears user from state and localStorage
     const logout = () => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
         setUser(null);
     };
 
     return (
-        <AuthContext.Provider value={{ user, setUser, logout }}>
+        <AuthContext.Provider value={{ user, login, logout }}>
             {children}
         </AuthContext.Provider>
     );
 };
 
+// Export AuthProvider as default
 export default AuthProvider;

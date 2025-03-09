@@ -1,85 +1,154 @@
-import express from "express";
-import Recipe from "../models/Recipe.js";
-import { protect } from "../middleware/authMiddleware.js"; // Ensure correct import
+const express = require("express");
+const multer = require("multer");
+const path = require("path");
+const Recipe = require("../models/Recipe");
+const verifyToken = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Create Recipe (Protected)
-router.post("/", protect, async (req, res, next) => {
-    try {
-        const { title, ingredients, instructions, image } = req.body;
-
-        const newRecipe = new Recipe({
-            title,
-            ingredients,
-            instructions,
-            image,
-            createdBy: req.user.id
-        });
-
-        await newRecipe.save();
-        res.status(201).json(newRecipe);
-    } catch (err) {
-        next(err); // Pass error to express error handler
+// Configure multer for image uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        console.log("Uploading to: ", path.join(__dirname, "../uploads")); // Debugging log
+        cb(null, "uploads/");
+    },
+    filename: (req, file, cb) => {
+        console.log("Uploading File: ", file.originalname); // Debugging log
+        cb(null, `${Date.now()}-${file.originalname}`);
     }
 });
 
-// Get All Recipes
-router.get("/", async (req, res, next) => {
-    try {
-        const recipes = await Recipe.find().populate("createdBy", "username");
-        res.json(recipes);
-    } catch (err) {
-        next(err);
+const upload = multer({ 
+    storage, 
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = ["image/jpeg", "image/png", "image/jpg"];
+        if (!allowedTypes.includes(file.mimetype)) {
+            return cb(new Error("Invalid file type. Only JPEG, PNG, and JPG are allowed."));
+        }
+        cb(null, true);
     }
 });
 
-// Get Recipe by ID
-router.get("/:id", async (req, res, next) => {
+// Access io from the app instance
+const getIo = (req) => req.app.get("io");
+
+// Create a Recipe (with Image Upload Support)
+router.post("/", verifyToken, upload.single("image"), async (req, res) => {
     try {
-        const recipe = await Recipe.findById(req.params.id).populate("createdBy", "username");
-        if (!recipe) return res.status(404).json({ message: "Recipe not found" });
+        const { title, ingredients, instructions } = req.body;
 
-        res.json(recipe);
-    } catch (err) {
-        next(err);
-    }
-});
-
-// Update Recipe (Protected)
-router.put("/:id", protect, async (req, res, next) => {
-    try {
-        const recipe = await Recipe.findById(req.params.id);
-        if (!recipe) return res.status(404).json({ message: "Recipe not found" });
-
-        if (recipe.createdBy.toString() !== req.user.id) {
-            return res.status(403).json({ message: "Unauthorized to update this recipe" });
+        // Validate required fields
+        if (!title || !ingredients || !instructions) {
+            return res.status(400).json({ message: "Title, ingredients, and instructions are required." });
         }
 
-        Object.assign(recipe, req.body);
-        await recipe.save();
+        // Get image path (if uploaded)
+        const image = req.file ? `/uploads/${req.file.filename}` : "";
 
-        res.json(recipe);
+        // Create new recipe
+        const newRecipe = new Recipe({
+            title,
+            ingredients: JSON.parse(ingredients), // Convert stringified array
+            instructions,
+            image,
+            user: req.user.id,
+        });
+
+        // Save recipe to the database
+        await newRecipe.save();
+
+        // Emit event for new recipe
+        const io = getIo(req);
+        io.emit("recipeCreated", newRecipe);
+
+        res.status(201).json(newRecipe);
     } catch (err) {
-        next(err);
+        console.error("Error creating recipe:", err);
+        res.status(500).json({ message: "Internal server error. Please try again later." });
     }
 });
 
-// Delete Recipe (Protected)
-router.delete("/:id", protect, async (req, res, next) => {
+// Get all Recipes
+router.get("/", async (req, res) => {
+    try {
+        const recipes = await Recipe.find().populate("user", "username");
+        res.json(recipes);
+    } catch (err) {
+        console.error("Error fetching recipes:", err);
+        res.status(500).json({ message: "Failed to fetch recipes." });
+    }
+});
+
+// Get a single Recipe
+router.get("/:id", async (req, res) => {
+    try {
+        const recipe = await Recipe.findById(req.params.id).populate("user", "username");
+        if (!recipe) {
+            return res.status(404).json({ message: "Recipe not found." });
+        }
+        res.json(recipe);
+    } catch (err) {
+        console.error("Error fetching recipe:", err);
+        res.status(500).json({ message: "Failed to fetch recipe." });
+    }
+});
+
+// Update a Recipe (Protected)
+router.put("/:id", verifyToken, async (req, res) => {
     try {
         const recipe = await Recipe.findById(req.params.id);
-        if (!recipe) return res.status(404).json({ message: "Recipe not found" });
+        if (!recipe) {
+            return res.status(404).json({ message: "Recipe not found." });
+        }
 
-        if (recipe.createdBy.toString() !== req.user.id) {
-            return res.status(403).json({ message: "Unauthorized to delete this recipe" });
+        if (recipe.user.toString() !== req.user.id) {
+            return res.status(403).json({ message: "Not authorized to update this recipe." });
+        }
+
+        const { title, ingredients, instructions, image } = req.body;
+
+        // Update only provided fields
+        if (title) recipe.title = title;
+        if (ingredients) recipe.ingredients = ingredients;
+        if (instructions) recipe.instructions = instructions;
+        if (image) recipe.image = image;
+
+        const updatedRecipe = await recipe.save();
+
+        // Emit event for updated recipe
+        const io = getIo(req);
+        io.emit("recipeUpdated", updatedRecipe);
+
+        res.json(updatedRecipe);
+    } catch (err) {
+        console.error("Error updating recipe:", err);
+        res.status(500).json({ message: "Failed to update recipe." });
+    }
+});
+
+// Delete a Recipe (Protected)
+router.delete("/:id", verifyToken, async (req, res) => {
+    try {
+        const recipe = await Recipe.findById(req.params.id);
+        if (!recipe) {
+            return res.status(404).json({ message: "Recipe not found." });
+        }
+
+        if (recipe.user.toString() !== req.user.id) {
+            return res.status(403).json({ message: "Not authorized to delete this recipe." });
         }
 
         await recipe.deleteOne();
-        res.json({ message: "Recipe deleted successfully" });
+
+        // Emit event for deleted recipe
+        const io = getIo(req);
+        io.emit("recipeDeleted", req.params.id);
+
+        res.json({ message: "Recipe deleted successfully." });
     } catch (err) {
-        next(err);
+        console.error("Error deleting recipe:", err);
+        res.status(500).json({ message: "Failed to delete recipe." });
     }
 });
 
-export default router;
+module.exports = router;

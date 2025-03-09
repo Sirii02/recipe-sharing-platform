@@ -1,11 +1,11 @@
 const mongoose = require("mongoose");
 
-const RecipeSchema = new mongoose.Schema({
-    title: { type: String, required: true },
-    ingredients: { type: [String], required: true },
-    instructions: { type: String, required: true },
-    image: { type: String }, // URL to image
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
+const recipeSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  ingredients: { type: [String], required: true },
+  instructions: { type: String, required: true },
+  image: { type: String, default: "" }, // Store image URL or file path
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 }, { timestamps: true });
 
-module.exports = mongoose.model("Recipe", RecipeSchema);
+module.exports = mongoose.model("Recipe", recipeSchema);
